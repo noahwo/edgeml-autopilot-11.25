@@ -1,356 +1,220 @@
-3 
-# TinyML Lifecycle Management By LLMs
+# EdgeML Lifecycle Management by LLMs
 
-This project automates the lifecycle management of TinyML applications using Large Language Models (LLMs). It streamlines the process of data processing, model conversion, and Arduino sketch generation for TinyML projects.
-
-## Table of Contents
-
-- [Installation](#installation)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Components](#components)
-- [Logging and Tracing](#logging-and-tracing)
-- [Extending the Project](#extending-the-project)
-- [Debugging Steps](#debugging-steps)
-- [License](#license)
-- [Known Issues](#known-issues)
+This project automates the repetitive stages of EdgeML application development using Large Language Models (LLMs). It can clean and engineer datasets, convert models to deployment formats, and generate sketches or Python runners for embedded and edge hardware.
+ 
 
 ## Installation
 
-To set up this project locally, follow these steps:
+### Prerequisites
 
-1. Clone the repository:
-   ```bash
-   git clone https://version.helsinki.fi/wuguangh/tinyml-autopilot.git
-   cd tinyml-autopilot
-   ````
+- Python 3.10 or 3.11 (required by `tensorflow==2.16.2`).
+- `pip` and a virtual environment tool (`venv` or `conda`) to keep dependencies isolated.
+- [Ollama](https://ollama.com/download) running locally if you plan to use self-hosted models, or OpenAI access if you configure `OPENAI_API_KEY`.
+- [`arduino-cli`](https://arduino.github.io/arduino-cli/latest/installation/) if you intend to compile generated `.ino` sketches.
+- SSH access to a Coral Dev Board (or compatible Edge TPU host) if you plan to run the TPU sketch generator. The project expects passwordless `ssh`/`scp` access.
+- Optional: a Langfuse account or self-hosted instance for tracing.
 
-2. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Rename `.env.example` to `.env` and fill in the needed keys.
-   ```
-   OPENAI_API_KEY=""
-   OPENAI_MODEL_NAME=""
-   LANGCHAIN_API_KEY=""
-   ```
-4. `arduino-cli` is required for sketch generation. Install it from [here](https://arduino.github.io/arduino-cli/latest/installation/).
+### Steps
 
-    [Search](https://arduino.github.io/arduino-cli/0.21/commands/arduino-cli_core_search/) for the `arduino-cli core` coresponding to your board:
-   ```bash
-   # Search for a core in Boards Manager
-   arduino-cli core search <keywords...> [flags]
-   ```
+1. Clone the repository and enter the directory.
 
-    [Install](https://arduino.github.io/arduino-cli/0.21/commands/arduino-cli_core_install/) the core:
-   ```bash
-   # Install a core from a package manager
-   arduino-cli core install PACKAGER:ARCH[@VERSION]... [flags]
-   ```
-   `Arduino Nano 33 BLE` as an example:
-   ```bash
-   arduino-cli core install arduino:mbed_nano
-   ```
-5. Installation of necessary and recommended `arduino-cli` libraries:  
-   - Recommended: `Harvard_TinyMLx, Arduino_APDS9960, Arduino_HTS221, Arduino_LSM9DS1, ArduinoBLE, FreeRTOS, tcs3200, TensorFlowLite_ESP32`, etc.
+    ```bash
+    git clone https://....git
+    cd edgeml-autopilot-11.2025
+    ```
+
+2. Create and activate a virtual environment (optional but recommended).
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    ```
+
+3. Install Python dependencies.
+
+    ```bash
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+
+4. Copy the example environment file and fill in the required values.
+
+    ```bash
+    cp example.env .env
+    ```
+
+    Key variables used in code:
+
+    - `OPENAI_API_KEY`: required for OpenAI models through LiteLLM.
+    - `OLLAMA_BASE_URL`: set if you run Ollama somewhere other than `http://localhost:11434`.
+    - `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`: used for tracing when running against Langfuse Cloud.
+    - `LANGFUSE_LOCAL_*`: alternate credentials for a self-hosted Langfuse instance.
+    - `LANGCHAIN_API_KEY`: optional but still referenced for backwards compatibility.
+    - `REMOTE_HOST`, `REMOTE_EXEC_PATH`, `REMOTE_PYTHON_ENV`, `REMOTE_PYTHON_EXECUTABLE`: required when running the TPU sketch generator because execution happens over SSH on the remote Coral device.
+
+    Remember to restart your shell (or reload the environment) after updating `.env`.
+
+5. Install the Arduino board support package used by the sketch generator.
+
+    ```bash
+    arduino-cli core update-index
+    arduino-cli core install arduino:mbed_nano
+    ```
+
+    The project copies `compiling/model.h` into each build directory. Confirm the tensor in that header matches the model you deploy.
+
+6. Install any Arduino libraries the generated sketches may request. The templates target `Arduino_APDS9960`, `Arduino_HTS221`, `Arduino_LSM9DS1`, `ArduinoBLE`, `Harvard_TinyMLx`, and `TensorFlowLite_ESP32`. Install the libraries you need via `arduino-cli lib install`.
+
+ 
 
 ## Usage
 
-This project for now consists of three main components: Data Processor, Model Converter, and Sketch Generator. Here's how to use each:
+All commands assume you run them from the repository root.
 
-All the three components can be run individually:
+### Run individual processors
 
-```bash
-python data_processor.py
-python model_converter.py
-python sketch_generator.py
-```
-
-or run the `main.py`, which also supports batch testing:
-```python
-def main():
-    # data: DataProcessor, convert: ModelConverter, sketch: SketchGenerator
-    stage = "sketch"
-    num_runs = 30
-    benchmarking = num_runs >= 30
-    ...
-```
+The processors expose `__main__` blocks so you can launch each pipeline directly:
 
 ```bash
-python main.py
+python src/processors/data_processor.py
+python src/processors/model_converter.py
+python src/processors/sketch_generator.py
+python src/processors/pysketch_generator.py
+python src/processors/tpusketch_generator.py
 ```
 
-### Demo: [Arduino Sketch Generation Demo](https://youtu.be/GsY5XDClerk?si=2FRgZS5EYmrs9LBh)
+Each processor loads its default configuration (dataset paths, target boards, etc.) from hard-coded values inside the file. Adjust those values before running if you need different assets.
 
-## Project Structure
+### Batch orchestration
 
+`src/main.py` coordinates repeated runs across processors and models. Without CLI arguments it executes the `main()` function, which currently:
+
+- Runs 30 iterations per processor (`data`, `convert`, `sketch`) by default.
+- Iterates over the hard-coded `model_config_list` (Ollama models in the current version).
+ 
+
+Before running batch tests:
+
+1. Update `model_config_list` with the models and providers you have access to.
+2. Reduce `num_runs` if you do not want 30 iterations.
+ 
+
+You can also call `run_batch_test` manually:
+
+```bash
+python src/main.py <processor> <trace_id> <run_index> <benchmark_flag> <session_id> "('<provider>', '<model>', <parameters>)"
 ```
+
+For example:
+
+```bash
+python src/main.py data 1234ab 1 False batch1 "('ollama', 'phi4:latest', False)"
+```
+
+The arguments mirror the signature in `main.run_batch_test`.
+
+### Outputs
+
+- Generated datasets and intermediate artifacts remain under `data/fruit_to_emoji/playground/`.
+- Converted models appear in `models/fruit_to_emoji/tflite_model/`.
+- Generated Arduino sketches compile inside `compiling/` and validated versions are stored under `results/object_detection/sketches/`.
+- Logs for each processor are written to `logs/<Processor>.log`.
+- TPU runs copy scripts into `/home/mendel/tinyml_autopilot/tmp` by default (configurable via `.env`).
+
+## Source Code Structure
+
+```text
 src/
-├── __init__.py
 ├── base/
-│   ├── __init__.py
 │   ├── base_processor.py
-│   └── llm_strategy.py
-├── factories/
-│   ├── __init__.py
-│   └── llm_factory.py
-├── main.py
+│   │   └── llm_strategy.py
+│   └── factories/
+│       └── llm_factory.py
 ├── processors/
-│   ├── __init__.py
 │   ├── data_processor.py
 │   ├── model_converter.py
-│   └── sketch_generator.py
-└── prompt_templates/
-    ├── __init__.py
-    ├── templates_convert.py
-    ├── templates_data_proc.py
-    └── templates_sketch.py
+│   ├── pysketch_generator.py
+│   ├── sketch_generator.py
+│   └── tpusketch_generator.py
+├── prompt_templates/
+│   ├── TMPL_DP.py
+│   ├── TMPL_MC.py
+│   ├── TMPL_PSG.py
+│   ├── TMPL_SG.py
+│   └── TMPL_TPUSG.py
+└── main.py
 ```
 
 ## Components
-### Prompt Templates
-Located in the `src/prompt_templates/` directory, prompt templates define the instructions and context provided to the LLM for generating specific code snippets. These templates ensure consistency and accuracy in the code generation process.
 
-- **`templates_sketch.py`**: Contains templates for generating Arduino `.ino` sketches, including guidelines for initialization, preprocessing, inference, and postprocessing steps.
-  
-- **`templates_data_proc.py`**: Defines templates for data processing tasks, detailing operations like data engineering and error handling.
-  
-- **`templates_convert.py`**: Includes templates related to model conversion tasks, such as converting TensorFlow models to TensorFlow Lite format.
+### Base layer
+
+- `BaseProcessor` (`src/base/base_processor.py`): environment loading, Langfuse tracing, logging, remote execution helpers, code extraction, and Arduino compilation.
+- `LLMStrategy` (`src/base/llm_strategy.py`): abstract strategy with LiteLLM-powered implementations for OpenAI and Ollama backends. Successful invocations are reported to Langfuse via LiteLLM callbacks.
+- `LLMFactory` (`src/factories/llm_factory.py`): creates strategy instances for `"openai"` and `"ollama"` types.
 
 ### Processors
 
-Processors are the core components responsible for handling specific tasks by interacting with the LLM. Each processor inherits from the `BaseProcessor` class, ensuring consistent functionality across different tasks.
+- `DataProcessor` (`src/processors/data_processor.py`): generates pandas transformations for the fruit RGB dataset, executes them in a playground directory, and retries on failure.
+- `ModelConverter` (`src/processors/model_converter.py`): produces Python scripts that convert `model.keras` to TensorFlow Lite, optionally applying post-training quantization, and executes them.
+- `SketchGenerator` (`src/processors/sketch_generator.py`): fills application specifications, injects programming guidelines, generates Arduino sketches, and compiles them with `arduino-cli`.
+- `PySketchGenerator` (`src/processors/pysketch_generator.py`): creates Python runners for TFLite models (object detection use case) and validates them locally.
+- `TPUSketchGenerator` (`src/processors/tpusketch_generator.py`): extends the Python sketch workflow to offload execution to a Coral Edge TPU host via SSH/SCP.
 
-Usage examples can be found under `if __name__ == "__main__":` in the processor `.py` files.
+Each processor maintains its own log file, traces LLM calls with Langfuse, and captures the last generated code snippet when errors occur.
 
-#### Data Processor
+### Prompt templates
 
-**File**: `src/processors/data_processor.py`
+Prompt composition lives under `src/prompt_templates/`:
 
-**Purpose**: Automates data preprocessing tasks, generating Python scripts to handle data cleaning, transformation, and feature engineering.
-
-**Key Functionalities**:
-- **User Input Acquisition**: Specifies dataset paths and descriptions.
-- **Suggestion Table Generation**: Uses LLM to suggest a sequence of data processing operations.
-- **Operation Code Generation**: Generates and executes code for each suggested data processing step.
-- **Error Handling**: Regenerates code upon encountering execution errors, ensuring robust data processing workflows.
-
-#### Model Converter
-
-**File**: `src/processors/model_converter.py`
-
-**Purpose**: Automates the conversion of machine learning models from one format to another, such as converting TensorFlow models to TensorFlow Lite format with or without quantization.
-
-**Key Functionalities**:
-- **User Input Acquisition**: Specifies original and converted model paths, quantization requirements, and data types.
-- **Conversion Code Generation**: Uses LLM to generate code for model conversion tasks.
-- **Error Handling**: Attempts to regenerate conversion code upon encountering execution errors.
-- **Execution**: Runs the generated conversion scripts to produce the desired model format.
- 
-
-
-#### Sketch Generator
-**File**: `src/processors/sketch_generator.py`
-
-**Purpose**: Generates Arduino `.ino` sketch files based on specified application requirements and hardware specifications.
-
-**Key Functionalities**:
-- **User Input Acquisition**: Gathers details like application name, description, board type, sensor data types, and classification classes.
-- **Specification Filling**: Utilizes prompt templates to create detailed application specifications.
-- **Sketch Generation**: Generates the Arduino sketch by formatting prompts with specifications and guidelines.
-- **Error Handling**: Attempts to regenerate code upon encountering errors during execution or compilation.
-- **Execution**: Compiles the generated sketch using `arduino-cli` to ensure validity.
- 
-### Base Classes
-
-#### BaseProcessor
-
-**File**: `src/base/base_processor.py`
-
-**Purpose**: Serves as the foundational class for all processors, providing shared functionalities such as environment setup, logging, LLM invocation with tracing, code execution, and error handling.
-
-**Key Functionalities**:
-- **Environment Loading**: Loads environment variables using `dotenv`.
-- **Logging Setup**: Configures logging with both console and file handlers using `colorlog`.
-- **LLM Invocation**: Invokes the LLM with tracing metadata, including network latency measurements.
-- **Code Execution**: Executes generated code snippets, handling both Python and Arduino sketches.
-- **Error Handling**: Manages exceptions and integrates with LangSmith for tracing errors.
-
-**Key Methods**:
-- `invoke_llm_with_trace(prompt, invoke_subtask=None)`: Invokes the LLM with tracing.
-- `execute_code(code, tmp_dir, sketch=False)`: Executes or compiles the provided code snippet.
-- `run()`: Abstract method to be implemented by subclasses for executing processor-specific tasks.
-
-#### LLMStrategy
-
-**File**: `src/base/llm_strategy.py`
-
-**Purpose**: Defines an abstract interface for different LLM strategies, allowing flexibility in using various LLM providers.
-
-**Key Functionalities**:
-- **Invoke LLM**: Abstract method to send prompts to the LLM and retrieve responses.
-- **Get Endpoint URL**: Retrieves the API endpoint URL for tracking purposes.
-
-**Concrete Implementations**:
-- **OpenAIStrategy**: Implements `LLMStrategy` for OpenAI's GPT models.
-- **OllamaStrategy**: Implements `LLMStrategy` for Ollama's models (To be fully implemented).
- 
-
-### Factories
-
-#### LLMFactory
-
-**File**: `src/factories/llm_factory.py`
-
-**Purpose**: Provides a factory method to instantiate different `LLMStrategy` implementations based on the specified type.
-
-**Key Functionalities**:
-- **Create LLM**: Returns an instance of the desired `LLMStrategy` (e.g., OpenAI, Ollama).
- 
-
-
-## Workflow Overview
-
-1. **Initialization**:
-   - Load environment variables.
-   - Initialize the appropriate `LLMStrategy` using `LLMFactory`.
-   - Instantiate the desired processor (`SketchGenerator`, `DataProcessor`, or `ModelConverter`) with the LLM strategy and a unique `trace_id`.
-
-2. **User Input Acquisition**:
-   - Each processor gathers required inputs, such as application specifications, dataset paths, or model details.
-
-3. **Prompt Composition**:
-   - Processors use predefined prompt templates to create detailed instructions for the LLM, ensuring the generated code aligns with project requirements.
-
-4. **LLM Invocation and Code Generation**:
-   - The processor sends the composed prompts to the LLM, receives generated code snippets, and attempts to execute or compile them.
-  
-5. **Error Handling and Retries**:
-   - If execution fails, the processor uses error-handling prompt templates to ask the LLM to regenerate and refine the code. This process repeats up to a specified number of retries.
-
-6. **Execution and Validation**:
-   - Successfully generated code is executed or compiled to ensure it meets the intended functionality.
-
-7. **Logging and Tracing**:
-   - Throughout the process, detailed logs are maintained, and tracing is integrated with LangSmith for monitoring and debugging.
+- `TMPL_DP.py`: suggestion tables and error handling for the data pipeline.
+- `TMPL_MC.py`: conversion prompts for generating TensorFlow Lite scripts.
+- `TMPL_SG.py`: spec filling and Arduino sketch generation instructions.
+- `TMPL_PSG.py`: prompts for Python sketch generation.
+- `TMPL_TPUSG.py`: prompt variants tailored for TPU-enabled Python scripts.
 
 ## Logging and Tracing
 
-The project employs robust logging and tracing mechanisms to monitor and debug processes.
-
-### Logging
-
-- **Configuration**: Set up using `colorlog` for colored console logs and standard formatting for file logs.
-- **Location**: Log files are stored in the `logs/` directory, named after each processor class (e.g., `SketchGenerator.log`).
-- **Usage**:
-  - Informational messages, errors, and debugging information are logged throughout the processing steps.
-
-### Tracing
-
-- **Integration**: Utilizes LangSmith for tracing LLM invocations and other processing steps.
-- **Metadata**: Includes details like network latency, trace IDs, and task-specific tags.
-- **Benefits**:
-  - Facilitates performance monitoring.
-  - Aids in debugging by providing detailed trace information for each task and subtask.
-
-
+- Logs are written to `logs/<Processor>.log` and use `colorlog` for human-friendly console output.
+- Langfuse traces are created for every processor run. Configure the appropriate `LANGFUSE_*` variables (cloud or self-hosted) in `.env`. Alternate credential sets (`LANGFUSE_LOCAL_*`, `LANGFUSE_LOCAL2_*`) are supported in code.
+- Network latency is measured for each LLM invocation and attached as metadata in the Langfuse trace.
 
 ## Extending the Project
 
-The modular architecture allows for easy extension and integration of new processors or LLM strategies.
+1. Create a new processor in `src/processors/` that subclasses `BaseProcessor`.
+2. Provide prompt templates in `src/prompt_templates/` if the workflow requires new prompt variants.
+3. Register the processor in orchestration code (for example, extend `processor_classes` in `main.py`).
+4. Update `LLMFactory` if you need to support additional model providers.
 
-### Adding a New Processor
+Example skeleton:
 
-1. **Create a New Processor File**:
-   - Add a new Python file in the `src/processors/` directory (e.g., `new_processor.py`).
+```python
+from base.base_processor import BaseProcessor
 
-2. **Inherit from `BaseProcessor`**:
-   ```python
-   from base.base_processor import BaseProcessor
+class NewProcessor(BaseProcessor):
+     def get_user_input(self):
+          # Populate fields used while composing prompts
+          ...
 
-   class NewProcessor(BaseProcessor):
-       def get_task_name(self, short=False):
-           return "new_processor"
+     def run(self):
+          self.get_user_input()
+          # Compose prompts, invoke the LLM and execute results
+          ...
+```
 
-       def get_user_input(self):
-           # Define user input acquisition logic
-           pass
+## Debugging Steps
 
-       def run(self):
-           # Define the processing workflow
-           pass
-   ```
-
-3. **Implement Required Methods**:
-   - `get_user_input()`: Gather necessary inputs.
-   - `run()`: Define the processing steps using LLM invocations and code execution.
-
-4. **Define Prompt Templates**:
-   - Add relevant templates in `src/prompt_templates/` and update the processor to use them.
-
-### Implementing a New LLM Strategy
-
-1. **Create a New Strategy Class**:
-   - Inherit from `LLMStrategy` and implement the abstract methods.
-   ```python
-   from base.llm_strategy import LLMStrategy
-
-   class NewLLMStrategy(LLMStrategy):
-       def __init__(self, ...):
-           # Initialize the new LLM
-           pass
-
-       def invoke(self, prompt):
-           # Define how to invoke the new LLM
-           pass
-
-       def get_endpoint_url(self) -> str:
-           # Return the LLM's API endpoint
-           pass
-   ```
-
-2. **Update `LLMFactory`**:
-   ```python
-   class LLMFactory:
-       @staticmethod
-       def create_llm(llm_type, **kwargs):
-           if llm_type == "newllm":
-               return NewLLMStrategy(...)
-           # Existing conditions
-   ```
-
-3. **Use the New Strategy**:
-   ```python
-   llm_strategy = LLMFactory.create_llm("newllm", ...)
-   ```
-
-
-### Debugging Steps
-
-1. **Check Logs**:
-   - Navigate to the `logs/` directory and inspect the relevant log file for error details.
-
-2. **Verify Environment Variables**:
-   - Ensure all necessary variables are set in the `.env` file.
-
-3. **Test LLM Connectivity**:
-   - Use a simple test script to verify that the LLM can be invoked successfully.
-
-4. **Validate Generated Code**:
-   - Manually review the generated code snippets to identify syntax or logical errors.
-
-5. **Review Tracing Information**:
-   - Use LangSmith to analyze trace data for insights into processing bottlenecks or failures.
-
-
+- Inspect `logs/<Processor>.log` for detailed error messages and the last generated code snippet.
+- Verify `.env` values are loaded (`python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('OPENAI_API_KEY'))"`).
+- Check LLM connectivity: `curl http://localhost:11434/api/tags` for Ollama or run a minimal LiteLLM call for OpenAI.
+- Ensure `arduino-cli` can compile a known example sketch before running the sketch generator.
+- For TPU runs, confirm passwordless SSH and that the remote Python environment contains required packages (`tensorflow`, `tflite-runtime`, `opencv-python`, etc.).
+- If Langfuse traces do not appear, double-check the credential set (`LANGFUSE_*`, `LANGFUSE_LOCAL_*`, or `LANGFUSE_LOCAL2_*`).
+ 
+ 
 
 ## License
 
-Apache License 2.0
+This project is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html). Ensure all redistributions comply with the GPLv3 terms.
 
 
-## Known Issues
-
-- MacOS cannot perform model conversion due to the `Tensorflow Lite` library issue. Linux should work fine.
- 

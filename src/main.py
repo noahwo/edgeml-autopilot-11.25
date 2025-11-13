@@ -12,8 +12,7 @@ from dotenv import load_dotenv
 # Add parent directory (Projects/) to Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from telegram_notifier import send_telegram_message
-
+ 
 project_path = os.path.dirname(__file__).split("/dev")[0]
 
 # print(project_path)
@@ -152,7 +151,7 @@ def main():
     time_start = time.time()
     for model_config in model_config_list:
 
-        send_telegram_message(f'model **"{model_config[1].capitalize()} - {model_config[2]}"** testing...')
+    
         testee_list = testee_list_.copy()
         
         stamp_atm=str(uuid.uuid4()).split("-")[0][:4]
@@ -162,7 +161,7 @@ def main():
 
         for testee, session_id in testee_list.items():
  
-            send_telegram_message(f"Processor: **{testee}**; Session ID: **{session_id}**")
+             
        
 
             for i in range(1, num_runs + 1):
