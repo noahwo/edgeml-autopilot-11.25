@@ -123,7 +123,7 @@ class BaseProcessor(ABC):
         if hasattr(self, "session_id"):
             trace_params["session_id"] = self.session_id
 
-        if str(socket.gethostname()) == "! svm-125.cs.helsinki.fi":
+        if str(socket.gethostname()) == "! another local hosted langfuse":
             self.set_langfuse_trace_helper(
                 "LANGFUSE_LOCAL_SECRET_KEY",
                 "LANGFUSE_LOCAL_PUBLIC_KEY",
