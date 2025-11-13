@@ -146,14 +146,10 @@ class LLMStrategy(ABC):
             messages = [{"role": "user", "content": prompts}]
             
         if model_provider == "ollama":
-            # api_base = (
-            #     self.api_base
-            #     if str(socket.gethostname()) == "svm-125.cs.helsinki.fi"
-            #     else "http://localhost:11434"
-            # )
+ 
             
             model_params={"model": f"ollama/{self.model_name}","api_base": self.api_base
-                if str(socket.gethostname()) == "svm-125.cs.helsinki.fi"
+                if str(socket.gethostname()) == "another local hosted langfuse"
                 else "http://localhost:11434"}
         elif model_provider == "openai":
             model_params={"model": self.model_name}
@@ -166,30 +162,6 @@ class LLMStrategy(ABC):
             "metadata": metadata_,
             **self.use_parameters(),
         }
-
-        # if model_provider == "ollama":
-        #     api_base = (
-        #         self.api_base
-        #         if str(socket.gethostname()) == "svm-125.cs.helsinki.fi"
-        #         else "http://localhost:11434"
-        #     )
-        #     return {
-        #         "model": f"ollama/{self.model_name}",
-        #         "api_base": api_base,
-        #         "messages": messages,
-        #         "metadata": metadata_,
-        #         **self.use_parameters(),
-        #     }
-
-        # if model_provider == "openai":
-        #     return {
-        #         "model": self.model_name,
-        #         "messages": messages,
-        #         "metadata": metadata_,
-        #         **self.use_parameters(),
-        #     }
-        # else:
-        #     raise ValueError(f"Invalid model provider: {model_provider}")
 
 
 class OpenAILiteLLMStrategy(LLMStrategy):
@@ -216,7 +188,7 @@ class OpenAILiteLLMStrategy(LLMStrategy):
             model_name: Name of the OpenAI model to use.
         """
         super().__init__(model_name, parameters)
-        # self.api_key = os.getenv("OPENAI_API_KEY")
+ 
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def invoke(self, prompts: list[str | PromptTemplate] | str, metadata_: dict, model_provider: str = "openai", lib_extract_model: str | None = None):
